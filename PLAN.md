@@ -143,7 +143,7 @@ so the archive has zero schema coupling.
 
 ## Cadence + cost
 
-- Detached 15-min loop: capture → render → ship. Cheap (only changed sessions upload).
+- Detached 5-min loop: capture → render → ship. Cheap (only changed sessions upload).
 - Measured basis (real data; 3.8–4.0 bytes/token JSON, markdown ≈ 0.8× JSON): a 500k-token
   session ≈ 4–4.5 MB neutral. **5/day × 30 days ≈ 0.7 GB/month** neutral, **+~1–1.5 GB**
   for the single DB fallback → **~2 GB/month**. GCS ≈ $0.02/GB/month → cents.
@@ -178,5 +178,5 @@ so the archive has zero schema coupling.
 2. `ship` with index merge + `pull`/`fetch` (dry-run GCS first).
 3. `delete` / `prune` / `reindex`.
 4. `db/` fallback + guards.
-5. Update `SKILL.md`/`README.md`; wire the 15-min loop; commit (push needs the user's PAT).
+5. Update `SKILL.md`/`README.md`; wire the 5-min loop; commit (push needs the user's PAT).
 6. Cold-VM restore proof in a non-project directory.

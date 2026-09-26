@@ -366,7 +366,7 @@ def main(argv: list[str]) -> int:
     if cmd in ("capture", "ship", "pull", "watch"):
         dry = "--dry-run" in rest
         force = "--force" in rest
-        interval = 15.0
+        interval = 5.0
         host = None
         for flag, conv in (("--interval-minutes", float), ("--host", str)):
             if flag in rest:

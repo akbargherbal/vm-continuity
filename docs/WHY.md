@@ -41,7 +41,7 @@ That's uses #1 and #2. Uses #3 and #4 are mostly already served elsewhere.
 
 - **Full dated history / searchable archive** — only needed for use #4, which the docs
   largely cover. Drop unless there's a real need to search old sessions.
-- **Per-pass snapshots** — never. ~21 MB every 15 min is ~**60 GB/month**. That's the line.
+- **Per-pass snapshots** — never. ~21 MB every 5 min is ~**180 GB/month**. That's the line.
 - **Per-session JSON exports** — cheap, and the version-change fallback. Keep.
 - **`snapshot/` and `tool-output/`** — small; keep or drop, not load-bearing.
 
@@ -49,14 +49,14 @@ That's uses #1 and #2. Uses #3 and #4 are mostly already served elsewhere.
 
 - Consistency, completeness (child/subagent sessions), and **simple restore**.
 - **Anti-clobber — the real risk.** A rolling `latest/` that always overwrites has a
-  nasty failure mode: a fresh VM that hasn't restored yet, with the 15-min loop already
+  nasty failure mode: a fresh VM that hasn't restored yet, with the 5-min loop already
   running, ships its own near-empty DB and **destroys the exact backup you needed.**
   This is the most likely way to lose the very thing this effort protects — it's not a
   history nicety, it's the core risk.
 
 ## Good enough, in my view
 
-- `latest/` every 15 min → resume.
+- `latest/` every 5 min → resume.
 - **One dated `snapshots/YYYY-MM-DD/` per day, kept ~30 days** → simultaneously the
   clobber insurance *and* light history. ~21 MB/day ≈ **600 MB/month**. Fine.
 - Provenance in `CAPTURE.json` (timestamp, label, host, repo `HEAD`) → so "latest" is

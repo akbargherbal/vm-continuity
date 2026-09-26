@@ -44,7 +44,7 @@ if [ ! -f "$AGENTS" ] || ! grep -q 'vm-continuity:start' "$AGENTS"; then
 <!-- vm-continuity:start -->
 - **OpenCode sessions are ephemeral.** This VM's `~/.local/share/opencode` dies with it.
   Ensure the backup loop is running; if not, start it (detached):
-  `vm-continuity watch --interval-minutes 15` (log `/content/logs/vm_continuity.log`).
+  `vm-continuity watch --interval-minutes 5` (log `/content/logs/vm_continuity.log`).
   One-line health check: `vm-continuity status` (exit 0 = healthy). If it reports stale,
   do not turn the session into backup repair — note it for the user and carry on.
   Each VM ships to its own namespace, so starting before restoring is safe. To recover
