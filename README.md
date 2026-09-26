@@ -23,8 +23,10 @@ git clone <this repo> ~/vm-continuity && bash ~/vm-continuity/install.sh
 (so it is available in **every** project), installs OpenCode if missing, and drops a
 `vm-continuity` shim on `~/.local/bin`.
 
-On a fresh Colab VM the launching notebook should clone this repo and run `install.sh`
-(one line), independent of any project's `setup.sh`.
+On a fresh Colab VM, a project's `bootstrap/setup.sh` clones-or-pulls this repo and runs
+`install.sh --no-opencode` as one of its parallel jobs (the project installs OpenCode
+itself). The project only *fetches* the tool; the tool and its skill live here. For a
+private repo the bootstrap needs a `GH_TOKEN`; a public repo clones non-interactively.
 
 ## Use
 

@@ -15,9 +15,11 @@ Decision (2026-09-26): the tool is a **standalone, tool-agnostic repo**, not par
 - **Global availability:** `install.sh` registers the skill globally by symlinking
   `~/.config/opencode/skills/vm-continuity` → `<repo>/skills/vm-continuity`, so OpenCode
   advertises it in **every** project (OpenCode's global skill source).
-- **Fresh VM:** clone the repo and run `install.sh` (adds the global skill link, checks/
-  installs OpenCode, prints next steps). The launching notebook gets one clone+install
-  line, alongside its existing project `setup.sh` line. The two repos are independent.
+- **Fresh VM / bootstrap:** a project's `bootstrap/setup.sh` clones-or-pulls this repo
+  and runs `install.sh --no-opencode` as a parallel job (the project installs OpenCode
+  itself — hence the flag, to avoid racing it). The project only *fetches* the tool; the
+  tool and its skill stay owned here. `install.sh` also works standalone. For a private
+  repo the bootstrap needs a token (`GH_TOKEN`); a public repo clones non-interactively.
 - **Config:** `CONTINUITY_GCS` (store root) and `CONTINUITY_STAGE` from env, like
   `GCP_BACKUP_BASE`; the notebook exports them. No silent personal-bucket default.
 - **Removed from this project** (all currently untracked): `skills/vm-continuity/`,
