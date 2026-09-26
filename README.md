@@ -33,8 +33,9 @@ private repo the bootstrap needs a `GH_TOKEN`; a public repo clones non-interact
 ```bash
 vm-continuity list
 vm-continuity capture            # consistent DB snapshot + per-session exports
-vm-continuity ship [--dry-run]   # rsync the staging folder to GCS
-vm-continuity pull               # fetch the store to the staging area
+vm-continuity ship [--dry-run]   # rsync this VM's namespace to GCS
+vm-continuity hosts              # list VM namespaces in the store
+vm-continuity pull [--host H]    # fetch a namespace to the staging area
 vm-continuity restore opencode -- --mode db|export
 ```
 
@@ -43,14 +44,15 @@ and `CONTINUITY_STAGE` (ephemeral staging, default `/content/vm_state`).
 
 ## Layout
 
+Each VM writes its **own namespace** (`by_host/<host>/`), so it can never clobber another
+VM's store. The target retrieval-first layout (per-session folders + `index.json`) is
+described in `PLAN.md`.
+
 ```
 <CONTINUITY_GCS>/opencode_sessions/
-  index.json                         catalog (merged; regenerable)
-  sessions/<YYYYMMDD>_<id>/          one folder per session
-    transcript.md  session.json  meta.json
-    children/                        subagent sessions, nested
-  config/                            ~/.config/opencode (service.json excluded)
-  db/opencode.db                     optional whole-store fallback
+  by_host/<host>/                    this VM's capture
+    CAPTURE.json  opencode.db  config/  sessions/  snapshot/  tool-output/
+  <legacy root>                      pre-namespace store, still restorable
 ```
 
 ## Design / build

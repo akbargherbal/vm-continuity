@@ -34,6 +34,27 @@ mkdir -p "$HOME/.config/opencode/skills"
 ln -sfn "$REPO/skills/vm-continuity" "$HOME/.config/opencode/skills/vm-continuity"
 echo "[vm-continuity] skill  -> ~/.config/opencode/skills/vm-continuity"
 
+# 2b. Global always-on hint. OpenCode loads ~/.config/opencode/AGENTS.md in EVERY
+#     project, so this is what makes the agent mindful of session backup without
+#     being asked. Idempotent: appended once, marked, never rewritten.
+AGENTS="$HOME/.config/opencode/AGENTS.md"
+if [ ! -f "$AGENTS" ] || ! grep -q 'vm-continuity:start' "$AGENTS"; then
+  mkdir -p "$(dirname "$AGENTS")"
+  cat >> "$AGENTS" <<'EOF'
+<!-- vm-continuity:start -->
+- **OpenCode sessions are ephemeral.** This VM's `~/.local/share/opencode` dies with it.
+  Ensure the backup loop is running; if not, start it (detached):
+  `vm-continuity watch --interval-minutes 15` (log `/content/logs/vm_continuity.log`).
+  Each VM ships to its own namespace, so starting before restoring is safe. To recover
+  a past session: `vm-continuity hosts`, `vm-continuity pull [--host H]`, then
+  `vm-continuity restore opencode -- --mode db|export`. Design: the `vm-continuity` repo.
+<!-- vm-continuity:end -->
+EOF
+  echo "[vm-continuity] global instruction -> $AGENTS"
+else
+  echo "[vm-continuity] global instruction already present"
+fi
+
 # 3. PATH shim so the CLI is `vm-continuity ...`. Prefer a directory already on
 #    PATH (/usr/local/bin on Colab, writable as root), else ~/.local/bin + a hint.
 if mkdir -p /usr/local/bin 2>/dev/null && [ -w /usr/local/bin ]; then

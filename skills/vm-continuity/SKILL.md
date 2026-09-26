@@ -67,28 +67,27 @@ Capture and transport are **separate jobs**:
 
 ## Store layout
 
+Current (prototype) — **each VM ships to its own namespace**, so it can never clobber
+another VM's store:
+
 ```
-<CONTINUITY_GCS>/opencode_sessions/       (CONTINUITY_GCS + tool STORE)
-  index.json                         catalog (merged; regenerable)
-  sessions/<YYYYMMDD>_<id>/          one folder per session
-    transcript.md                    primary, tool-neutral — reads forever
-    session.json                     lossless, re-importable (OpenCode format)
-    meta.json                        title/dates/project/parent/counts/version
-    children/                        subagent sessions, nested (one fetch gets all)
-  config/                            ~/.config/opencode (service.json excluded)
-  db/opencode.db                     optional whole-store fallback (schema-coupled)
+<CONTINUITY_GCS>/opencode_sessions/
+  by_host/<host>/                    this VM's capture (CAPTURE.json, opencode.db, ...)
+  <legacy root>                      pre-namespace store, still restorable
 ```
 
-`transcript.md` is rendered from `session.json`, so the *archive* has zero schema coupling;
-only the renderer is coupled, at capture time.
+Target (retrieval-first, Milestone 1) — one folder per session, tool-neutral:
+`sessions/<YYYYMMDD>_<id>/{transcript.md, session.json, meta.json, children/}` +
+a merged `index.json`, with `config/` and a `db/` fallback.
 
 ## Commands
 
 ```bash
 vm-continuity list
 vm-continuity capture [tool ...]
-vm-continuity ship [--dry-run] [tool ...]
-vm-continuity pull [tool ...]
+vm-continuity ship [--dry-run] [--force] [tool ...]
+vm-continuity hosts                                  # list VM namespaces in the store
+vm-continuity pull [--host H] [tool ...]
 vm-continuity restore opencode -- --mode db          # exact (needs db/ fallback)
 vm-continuity restore opencode -- --mode export -- --directory <dir>   # portable
 # planned: fetch <id|prefix> | delete <id> | prune --before <date> | reindex

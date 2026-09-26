@@ -15,20 +15,28 @@ Usage:
     python continuity.py list
     python continuity.py capture [tool ...]
     python continuity.py ship [--dry-run] [--force] [tool ...]
-    python continuity.py pull [tool ...]
+    python continuity.py hosts [tool ...]
+    python continuity.py pull [--host H] [tool ...]
     python continuity.py restore <tool> [-- <tool args>]
     python continuity.py watch [--interval-minutes N] [--dry-run] [tool ...]
+
+Each VM ships to its OWN namespace, <base>/<STORE>/by_host/<host>/, so a fresh VM's
+captures can never clobber another VM's store. `pull` reads a host namespace (or the
+legacy aggregate root if one exists).
 
 Env overrides:
     CONTINUITY_STAGE   default /content/vm_state
     CONTINUITY_GCS     base bucket/prefix; a tool lands under <base>/<STORE>/
                        (default gs://akbar-december-2024-backup)
+    CONTINUITY_HOST    override the host namespace name (default: hostname)
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
+import socket
 import subprocess
 import sys
 import time
@@ -42,9 +50,38 @@ GCS = os.environ.get("CONTINUITY_GCS", "gs://akbar-december-2024-backup").rstrip
 
 
 def store_uri(tools: dict, name: str) -> str:
-    """Where a tool's store lives: <base>/<STORE>/."""
+    """A tool's logical store root: <base>/<STORE>/."""
     sub = getattr(tools[name], "STORE", name)
     return f"{GCS}/{sub}" if sub else GCS
+
+
+def host_name() -> str:
+    """This VM's namespace name (override with CONTINUITY_HOST)."""
+    raw = os.environ.get("CONTINUITY_HOST") or socket.gethostname()
+    return re.sub(r"[^A-Za-z0-9._-]", "-", raw).strip("-") or "unknown"
+
+
+def ship_uri(tools: dict, name: str) -> str:
+    """Where THIS VM ships: <root>/by_host/<host>/."""
+    return f"{store_uri(tools, name)}/by_host/{host_name()}"
+
+
+def _gsutil_exists(uri: str) -> bool:
+    return subprocess.run(["gsutil", "-q", "stat", uri], capture_output=True).returncode == 0
+
+
+def _list_hosts(root: str) -> list[str]:
+    res = subprocess.run(
+        ["gsutil", "ls", "-d", root.rstrip("/") + "/by_host/*/"],
+        capture_output=True, text=True,
+    )
+    hosts = []
+    for line in res.stdout.splitlines():
+        line = line.strip().rstrip("/")
+        if "/by_host/" not in line:
+            continue
+        hosts.append(line.rsplit("/", 1)[-1])
+    return sorted(set(hosts))
 
 
 def _local_session_count(src: Path):
@@ -122,7 +159,7 @@ def cmd_ship(tools: dict, names: list[str], dry_run: bool, force: bool = False) 
         if not src.is_dir():
             print(f"[ship] skip {name}: no local capture at {src}")
             continue
-        dst = store_uri(tools, name)
+        dst = ship_uri(tools, name)
         if not dry_run and not force:
             local = _local_session_count(src)
             remote = _remote_session_count(dst)
@@ -155,17 +192,49 @@ def cmd_watch(tools: dict, names: list[str], interval_minutes: float,
         time.sleep(interval)
 
 
-def cmd_pull(tools: dict, names: list[str]) -> int:
+def _resolve_pull_source(root: str, host: str | None) -> str | None:
+    if host:
+        return f"{root}/by_host/{host}"
+    if _gsutil_exists(root.rstrip("/") + "/CAPTURE.json"):
+        return root  # legacy/aggregate store (pre-namespace)
+    hosts = _list_hosts(root)
+    if len(hosts) == 1:
+        return f"{root}/by_host/{hosts[0]}"
+    if not hosts:
+        print(f"[pull] nothing at {root} (no CAPTURE.json, no by_host/ entries)",
+              file=sys.stderr)
+        return None
+    print(f"[pull] multiple hosts — pass --host <one of>: {', '.join(hosts)}", file=sys.stderr)
+    return None
+
+
+def cmd_pull(tools: dict, names: list[str], host: str | None = None) -> int:
     rc = 0
     for name in names:
         dst = STAGE / name
         dst.mkdir(parents=True, exist_ok=True)
-        src = store_uri(tools, name)
+        src = _resolve_pull_source(store_uri(tools, name), host)
+        if src is None:
+            return 2
         cmd = ["gsutil", "-m", "rsync", "-r", src, str(dst)]
         print(f"[pull] {src} -> {dst}")
         if subprocess.run(cmd).returncode != 0:
             rc = 1
     return rc
+
+
+def cmd_hosts(tools: dict) -> int:
+    for name in tools:
+        root = store_uri(tools, name)
+        legacy = _gsutil_exists(root.rstrip("/") + "/CAPTURE.json")
+        hosts = _list_hosts(root)
+        print(f"{name}: root={root}")
+        print(f"  legacy root CAPTURE.json: {'yes' if legacy else 'no'}")
+        for h in hosts:
+            print(f"  by_host/{h}/")
+        if not hosts:
+            print("  by_host/: (none)")
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -177,18 +246,26 @@ def main(argv: list[str]) -> int:
 
     if cmd == "list":
         return cmd_list(tools)
+    if cmd == "hosts":
+        return cmd_hosts(tools)
     if cmd in ("capture", "ship", "pull", "watch"):
         dry = "--dry-run" in rest
         force = "--force" in rest
         interval = 15.0
-        if "--interval-minutes" in rest:
-            i = rest.index("--interval-minutes")
-            try:
-                interval = float(rest[i + 1])
-            except (IndexError, ValueError):
-                print("--interval-minutes needs a number", file=sys.stderr)
-                return 2
-            rest = rest[:i] + rest[i + 2:]
+        host = None
+        for flag, conv in (("--interval-minutes", float), ("--host", str)):
+            if flag in rest:
+                i = rest.index(flag)
+                try:
+                    val = conv(rest[i + 1])
+                except (IndexError, ValueError):
+                    print(f"{flag} needs a value", file=sys.stderr)
+                    return 2
+                rest = rest[:i] + rest[i + 2:]
+                if flag == "--interval-minutes":
+                    interval = val
+                else:
+                    host = val
         names = [a for a in rest if not a.startswith("-")] or list(tools)
         unknown = [n for n in names if n not in tools]
         if unknown:
@@ -197,7 +274,7 @@ def main(argv: list[str]) -> int:
         if cmd == "capture":
             return cmd_capture(tools, names)
         if cmd == "pull":
-            return cmd_pull(tools, names)
+            return cmd_pull(tools, names, host)
         if cmd == "watch":
             return cmd_watch(tools, names, interval, dry, force)
         return cmd_ship(tools, names, dry, force)
