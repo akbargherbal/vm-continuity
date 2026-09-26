@@ -14,9 +14,10 @@ backup script. See skills/vm-continuity/SKILL.md for the model and rules.
 Usage:
     python continuity.py list
     python continuity.py capture [tool ...]
-    python continuity.py ship [--dry-run] [tool ...]
+    python continuity.py ship [--dry-run] [--force] [tool ...]
     python continuity.py pull [tool ...]
     python continuity.py restore <tool> [-- <tool args>]
+    python continuity.py watch [--interval-minutes N] [--dry-run] [tool ...]
 
 Env overrides:
     CONTINUITY_STAGE   default /content/vm_state
@@ -30,6 +31,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -43,6 +45,29 @@ def store_uri(tools: dict, name: str) -> str:
     """Where a tool's store lives: <base>/<STORE>/."""
     sub = getattr(tools[name], "STORE", name)
     return f"{GCS}/{sub}" if sub else GCS
+
+
+def _local_session_count(src: Path):
+    cap = src / "CAPTURE.json"
+    if not cap.exists():
+        return None
+    try:
+        return int(json.loads(cap.read_text()).get("sessions", {}).get("total"))
+    except Exception:
+        return None
+
+
+def _remote_session_count(store: str):
+    res = subprocess.run(
+        ["gsutil", "cat", store.rstrip("/") + "/CAPTURE.json"],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0 or not res.stdout.strip():
+        return None
+    try:
+        return int(json.loads(res.stdout).get("sessions", {}).get("total"))
+    except Exception:
+        return None
 
 
 def load_tools() -> dict:
@@ -85,8 +110,12 @@ def cmd_capture(tools: dict, names: list[str]) -> int:
     return rc
 
 
-def cmd_ship(tools: dict, names: list[str], dry_run: bool) -> int:
-    """rsync each tool's staging folder to its store (append/update, never deletes)."""
+def cmd_ship(tools: dict, names: list[str], dry_run: bool, force: bool = False) -> int:
+    """rsync each tool's staging folder to its store (append/update, never deletes).
+
+    Anti-clobber: unless --force, refuse to ship a tool whose local session count is
+    *below* the store's — so a fresh VM (near-empty DB) cannot overwrite a richer backup.
+    """
     rc = 0
     for name in names:
         src = STAGE / name
@@ -94,6 +123,16 @@ def cmd_ship(tools: dict, names: list[str], dry_run: bool) -> int:
             print(f"[ship] skip {name}: no local capture at {src}")
             continue
         dst = store_uri(tools, name)
+        if not dry_run and not force:
+            local = _local_session_count(src)
+            remote = _remote_session_count(dst)
+            if local is not None and remote is not None and local < remote:
+                print(
+                    f"[ship] REFUSING {name}: local has {local} sessions, store has "
+                    f"{remote} — possible clobber from a fresh VM. Use --force to override."
+                )
+                rc = 1
+                continue
         cmd = ["gsutil", "-m", "rsync", "-r", "-c", str(src), dst.rstrip("/") + "/"]
         print(f"[ship] {src} -> {dst}/")
         if dry_run:
@@ -102,6 +141,18 @@ def cmd_ship(tools: dict, names: list[str], dry_run: bool) -> int:
         if subprocess.run(cmd).returncode != 0:
             rc = 1
     return rc
+
+
+def cmd_watch(tools: dict, names: list[str], interval_minutes: float,
+              dry_run: bool, force: bool) -> int:
+    """capture + ship on a loop. Intended to be run detached (see SKILL.md)."""
+    interval = max(60.0, interval_minutes * 60.0)
+    print(f"[watch] capture+ship every {interval_minutes:.0f} min "
+          f"(dry-run={dry_run}, force={force})")
+    while True:
+        cmd_capture(tools, names)
+        cmd_ship(tools, names, dry_run, force)
+        time.sleep(interval)
 
 
 def cmd_pull(tools: dict, names: list[str]) -> int:
@@ -126,8 +177,18 @@ def main(argv: list[str]) -> int:
 
     if cmd == "list":
         return cmd_list(tools)
-    if cmd in ("capture", "ship", "pull"):
+    if cmd in ("capture", "ship", "pull", "watch"):
         dry = "--dry-run" in rest
+        force = "--force" in rest
+        interval = 15.0
+        if "--interval-minutes" in rest:
+            i = rest.index("--interval-minutes")
+            try:
+                interval = float(rest[i + 1])
+            except (IndexError, ValueError):
+                print("--interval-minutes needs a number", file=sys.stderr)
+                return 2
+            rest = rest[:i] + rest[i + 2:]
         names = [a for a in rest if not a.startswith("-")] or list(tools)
         unknown = [n for n in names if n not in tools]
         if unknown:
@@ -137,7 +198,9 @@ def main(argv: list[str]) -> int:
             return cmd_capture(tools, names)
         if cmd == "pull":
             return cmd_pull(tools, names)
-        return cmd_ship(tools, names, dry)
+        if cmd == "watch":
+            return cmd_watch(tools, names, interval, dry, force)
+        return cmd_ship(tools, names, dry, force)
     if cmd == "restore":
         if not rest or rest[0] not in tools:
             print("usage: continuity.py restore <tool> [-- <tool args>]", file=sys.stderr)

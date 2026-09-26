@@ -34,11 +34,21 @@ mkdir -p "$HOME/.config/opencode/skills"
 ln -sfn "$REPO/skills/vm-continuity" "$HOME/.config/opencode/skills/vm-continuity"
 echo "[vm-continuity] skill  -> ~/.config/opencode/skills/vm-continuity"
 
-# 3. PATH shim so the CLI is `vm-continuity ...` (add ~/.local/bin to PATH if needed).
-mkdir -p "$HOME/.local/bin"
+# 3. PATH shim so the CLI is `vm-continuity ...`. Prefer a directory already on
+#    PATH (/usr/local/bin on Colab, writable as root), else ~/.local/bin + a hint.
+if mkdir -p /usr/local/bin 2>/dev/null && [ -w /usr/local/bin ]; then
+  SHIM_DIR=/usr/local/bin
+else
+  SHIM_DIR="$HOME/.local/bin"
+  mkdir -p "$SHIM_DIR"
+fi
 chmod +x "$REPO/continuity.py"
-ln -sfn "$REPO/continuity.py" "$HOME/.local/bin/vm-continuity"
-echo "[vm-continuity] shim   -> ~/.local/bin/vm-continuity"
+ln -sfn "$REPO/continuity.py" "$SHIM_DIR/vm-continuity"
+echo "[vm-continuity] shim   -> $SHIM_DIR/vm-continuity"
+case ":$PATH:" in
+  *":$SHIM_DIR:"*) ;;
+  *) echo "[vm-continuity] NOTE: $SHIM_DIR is not on PATH; add it, or run: python $REPO/continuity.py" ;;
+esac
 
 # 4. Report prerequisites.
 echo "[vm-continuity] gsutil: $(command -v gsutil || echo 'MISSING — needed to ship/pull')"
