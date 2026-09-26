@@ -25,6 +25,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 from pathlib import Path
 
 NAME = "opencode"
@@ -292,10 +293,31 @@ def _restore_export(stage: Path, mode_args: list[str]) -> int:
 
 
 def restore(stage: Path, argv: list[str]) -> int:
-    if argv and argv[0] in ("db", "export"):
+    """Dispatch to the db/export restore path.
+
+    Accepts BOTH documented spellings:
+
+        restore opencode -- --mode db|export ...
+        restore opencode -- db|export ...
+
+    and tolerates one extra ``--`` before the mode's own options
+    (``-- --mode export -- --directory DIR``). No mode given means ``db``.
+    """
+    argv = list(argv)
+    if argv and argv[0] == "--":            # tolerate the outer "--"
+        argv = argv[1:]
+    if argv and argv[0] == "--mode":
+        if len(argv) >= 2 and argv[1] in ("db", "export"):
+            mode, rest = argv[1], argv[2:]
+        else:
+            print("--mode must be one of: db, export", file=sys.stderr)
+            return 2
+    elif argv and argv[0] in ("db", "export"):
         mode, rest = argv[0], argv[1:]
     else:
         mode, rest = "db", argv
+    if rest and rest[0] == "--":            # tolerate an inner "--" before opts
+        rest = rest[1:]
     if mode == "export":
         return _restore_export(stage, rest)
     return _restore_db(stage, rest)

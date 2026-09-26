@@ -89,7 +89,8 @@ vm-continuity ship [--dry-run] [--force] [tool ...]
 vm-continuity hosts                                  # list VM namespaces in the store
 vm-continuity pull [--host H] [tool ...]
 vm-continuity restore opencode -- --mode db          # exact (needs db/ fallback)
-vm-continuity restore opencode -- --mode export -- --directory <dir>   # portable
+vm-continuity restore opencode -- --mode export --directory <dir>   # portable
+vm-continuity status                                 # one-line loop health (exit 0 = healthy)
 # planned: fetch <id|prefix> | delete <id> | prune --before <date> | reindex
 ```
 

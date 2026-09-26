@@ -19,6 +19,7 @@ Usage:
     python continuity.py pull [--host H] [tool ...]
     python continuity.py restore <tool> [-- <tool args>]
     python continuity.py watch [--interval-minutes N] [--dry-run] [tool ...]
+    python continuity.py status
 
 Each VM ships to its OWN namespace, <base>/<STORE>/by_host/<host>/, so a fresh VM's
 captures can never clobber another VM's store. `pull` reads a host namespace (or the
@@ -33,6 +34,7 @@ Env overrides:
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import re
@@ -180,16 +182,127 @@ def cmd_ship(tools: dict, names: list[str], dry_run: bool, force: bool = False) 
     return rc
 
 
+def _watch_status_path() -> Path:
+    return STAGE / "watch_status.json"
+
+
+def _write_watch_status(**fields) -> None:
+    """Best-effort, atomic-ish write of the watch loop's status. Never raises.
+
+    This is the "never fail silently" surface: `vm-continuity status` reads it.
+    A failure to write status must not kill the loop.
+    """
+    path = _watch_status_path()
+    try:
+        cur = json.loads(path.read_text()) if path.exists() else {}
+    except Exception:
+        cur = {}
+    cur.update(fields)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(cur, indent=2) + "\n")
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
+def _watch_iteration(tools: dict, names: list[str], dry_run: bool, force: bool):
+    """One capture+ship pass. Returns (ok, error_or_None). Never raises."""
+    try:
+        cap_rc = cmd_capture(tools, names)
+        ship_rc = cmd_ship(tools, names, dry_run, force)
+    except Exception as e:  # a transient error must not end the loop
+        return False, f"{type(e).__name__}: {e}"
+    if cap_rc == 0 and ship_rc == 0:
+        return True, None
+    return False, f"capture rc={cap_rc}, ship rc={ship_rc}"
+
+
 def cmd_watch(tools: dict, names: list[str], interval_minutes: float,
               dry_run: bool, force: bool) -> int:
-    """capture + ship on a loop. Intended to be run detached (see SKILL.md)."""
+    """capture + ship on a loop. Intended to be run detached (see SKILL.md).
+
+    Self-healing by design: a transient failure is logged and retried with a
+    capped backoff instead of ending the loop. Status is written to
+    STAGE/watch_status.json and read by `continuity.py status`, so a persistent
+    failure is *visible* without anyone babysitting the process.
+    """
     interval = max(60.0, interval_minutes * 60.0)
+    _write_watch_status(
+        pid=os.getpid(),
+        started=dt.datetime.now().isoformat(timespec="seconds"),
+        interval_minutes=interval_minutes,
+        tools=names,
+        consecutive_failures=0,
+        last_result="starting",
+        last_error=None,
+    )
     print(f"[watch] capture+ship every {interval_minutes:.0f} min "
-          f"(dry-run={dry_run}, force={force})")
+          f"(dry-run={dry_run}, force={force}); status -> {_watch_status_path()}")
+    fails = 0
     while True:
-        cmd_capture(tools, names)
-        cmd_ship(tools, names, dry_run, force)
-        time.sleep(interval)
+        ok, err = _watch_iteration(tools, names, dry_run, force)
+        now = dt.datetime.now().isoformat(timespec="seconds")
+        if ok:
+            fails = 0
+            _write_watch_status(last_capture=now, last_ship_ok=now, last_result="ok",
+                                consecutive_failures=0, last_error=None)
+            print(f"[watch] ok at {now}")
+            delay = interval
+        else:
+            fails += 1
+            _write_watch_status(last_result="failed", last_failure=now,
+                                consecutive_failures=fails, last_error=err)
+            print(f"[watch] FAILED ({fails}) at {now}: {err} — retrying", file=sys.stderr)
+            delay = min(interval, 60.0 * (2 ** min(fails - 1, 3)))
+        time.sleep(delay)
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def cmd_status(tools: dict) -> int:
+    """One-line health of the session-backup loop. Exit 0 only when healthy.
+
+    Cheap enough to run before a task and at session end (see AGENTS.md): the
+    point is to KNOW whether backup happened, not to repair anything.
+    """
+    path = _watch_status_path()
+    if not path.exists():
+        print(f"[status] loop=DOWN (no {path} — never started?)")
+        return 1
+    try:
+        m = json.loads(path.read_text())
+    except Exception as e:
+        print(f"[status] loop=UNKNOWN (unreadable {path}: {e})")
+        return 1
+    pid = m.get("pid")
+    running = bool(pid) and _pid_alive(int(pid))
+    age = "n/a"
+    last_ok = m.get("last_ship_ok")
+    if last_ok:
+        try:
+            secs = (dt.datetime.now() - dt.datetime.fromisoformat(last_ok)).total_seconds()
+            age = f"{int(secs)}s ago" if secs < 3600 else f"{secs / 3600:.1f}h ago"
+        except Exception:
+            age = "?"
+    fails = m.get("consecutive_failures", 0)
+    state = "OK" if (running and not fails) else ("STALE" if running else "DOWN")
+    where = f"running(pid {pid})" if running else "DOWN"
+    err = m.get("last_error")
+    print(f"[status] loop={where} state={state} last_ship_ok={last_ok} ({age}) "
+          f"failures={fails}" + (f" last_error={err}" if err else ""))
+    return 0 if state == "OK" else 1
 
 
 def _resolve_pull_source(root: str, host: str | None) -> str | None:
@@ -246,6 +359,8 @@ def main(argv: list[str]) -> int:
 
     if cmd == "list":
         return cmd_list(tools)
+    if cmd == "status":
+        return cmd_status(tools)
     if cmd == "hosts":
         return cmd_hosts(tools)
     if cmd in ("capture", "ship", "pull", "watch"):

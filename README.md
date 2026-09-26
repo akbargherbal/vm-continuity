@@ -37,6 +37,7 @@ vm-continuity ship [--dry-run]   # rsync this VM's namespace to GCS
 vm-continuity hosts              # list VM namespaces in the store
 vm-continuity pull [--host H]    # fetch a namespace to the staging area
 vm-continuity restore opencode -- --mode db|export
+vm-continuity status             # one-line health of the backup loop (exit 0 = healthy)
 ```
 
 Env overrides: `CONTINUITY_GCS` (store base; the tool lands under `<base>/opencode_sessions/`)
