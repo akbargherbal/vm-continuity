@@ -28,6 +28,20 @@ On a fresh Colab VM, a project's `bootstrap/setup.sh` clones-or-pulls this repo 
 itself). The project only *fetches* the tool; the tool and its skill live here. For a
 private repo the bootstrap needs a `GH_TOKEN`; a public repo clones non-interactively.
 
+## Compatibility
+
+Tested against OpenCode **1.18.x**. OpenCode's DB/CLI surface has shifted across
+versions; `tools/opencode.py` adapts to whichever it finds:
+
+| Area | Older OpenCode | 1.18.x |
+|---|---|---|
+| sessions table | `session_v2` | `session` — the tool detects either |
+| session export/import | `opencode session export/import` | `opencode export` / `opencode import` |
+
+So a store captured on one version is still enumerable and restorable on another.
+If OpenCode changes again, the two touch points are `_session_table()` and the
+`export`/`import` calls in `tools/opencode.py`.
+
 ## Use
 
 ```bash

@@ -13,7 +13,7 @@ consistent snapshot with the sqlite3 backup API instead.
 Sessions are enumerated from the snapshot, not from `opencode session list`:
 `session list` is project-scoped and top-level-only, so it silently hides child
 (subagent) sessions. `select id from session_v2` catches every one, and
-`opencode session export <id>` works from any working directory.
+`opencode export <id>` works from any working directory.
 """
 
 from __future__ import annotations
@@ -37,6 +37,18 @@ STORE = "opencode_sessions"
 _SKIP_DATA = {"opencode.db-wal", "opencode.db-shm", "log"}
 # Never restore this: it is machine-local (holds the server password/pid).
 _SKIP_CONFIG = {"service.json"}
+
+
+def _session_table(con: sqlite3.Connection) -> str:
+    """opencode renamed its sessions table across versions (session_v2 -> session);
+    pick whichever this DB actually has."""
+    names = {r[0] for r in con.execute(
+        "select name from sqlite_master where type='table'")}
+    if "session_v2" in names:
+        return "session_v2"
+    if "session" in names:
+        return "session"
+    raise sqlite3.OperationalError("no session table (looked for session_v2, session)")
 
 
 def _home() -> Path:
@@ -74,7 +86,7 @@ def _opencode(*args: str) -> subprocess.CompletedProcess | None:
 def _run_to_file(args: list[str], dest: Path) -> int | None:
     """Run opencode with stdout redirected to a real file, returning its exit code.
 
-    `session export` truncates non-deterministically when stdout is a *pipe*
+    `opencode export` truncates non-deterministically when stdout is a *pipe*
     (the same session yielded 260 KB / 671 KB / 1.4 MB / 2.2 MB across runs),
     but is byte-stable when stdout is a file. Never route export through a
     pipe, and never use `_opencode` (capture_output=True) for it.
@@ -159,7 +171,8 @@ def capture(stage: Path, log=print) -> dict:
     if snap.exists():
         con = sqlite3.connect(str(snap))
         try:
-            ids = [r[0] for r in con.execute("select id from session_v2 order by time_created")]
+            ids = [r[0] for r in con.execute(
+                f"select id from {_session_table(con)} order by time_created")]
         finally:
             con.close()
     sdest = stage / "sessions"
@@ -169,7 +182,7 @@ def capture(stage: Path, log=print) -> dict:
     exported, failed = 0, []
     for sid in ids:
         dest = sdest / f"{sid}.json"
-        rc = _run_to_file(["session", "export", sid], dest)
+        rc = _run_to_file(["export", sid], dest)
         if rc == 0 and dest.exists() and dest.stat().st_size > 0:
             exported += 1
         else:
@@ -264,13 +277,14 @@ def _restore_export(stage: Path, mode_args: list[str]) -> int:
     if db.exists():
         con = sqlite3.connect(str(db))
         try:
-            parent_of = {r[0]: r[1] for r in con.execute("select id, parent_id from session_v2")}
+            parent_of = {r[0]: r[1] for r in con.execute(
+                f"select id, parent_id from {_session_table(con)}")}
         finally:
             con.close()
     files.sort(key=lambda f: 0 if not parent_of.get(f.stem) else 1)
 
     def _import(f: Path) -> bool:
-        res = _opencode("session", "import", str(f), "--directory", str(directory), "--standalone")
+        res = _opencode("import", str(f))
         return bool(res and res.returncode == 0)
 
     imported, failed = 0, []
