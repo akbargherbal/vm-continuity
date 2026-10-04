@@ -38,6 +38,11 @@ _SKIP_DATA = {"opencode.db-wal", "opencode.db-shm", "log"}
 # Never restore this: it is machine-local (holds the server password/pid).
 _SKIP_CONFIG = {"service.json"}
 
+# opencode keeps a git snapshot of the workspace under data_dir()/snapshot; it is
+# small on small projects but can be many GB on a large one. Skip side dirs above
+# this size unless the operator raises CONTINUITY_SIDE_MAX_MB.
+SIDE_MAX_BYTES = int(float(os.environ.get("CONTINUITY_SIDE_MAX_MB", "200")) * 1024 * 1024)
+
 
 def _session_table(con: sqlite3.Connection) -> str:
     """opencode renamed its sessions table across versions (session_v2 -> session);
@@ -71,6 +76,17 @@ def _sha256(path: Path, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+def _dir_size(path: Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for fn in files:
+            try:
+                total += os.path.getsize(os.path.join(root, fn))
+            except OSError:
+                pass
+    return total
+
+
 def _opencode(*args: str) -> subprocess.CompletedProcess | None:
     exe = shutil.which("opencode")
     if not exe:
@@ -81,6 +97,35 @@ def _opencode(*args: str) -> subprocess.CompletedProcess | None:
         )
     except Exception:
         return None
+
+
+_EXPORT_PREFIX: list[str] | None = None
+_IMPORT_SESSION_SUB: bool | None = None
+
+
+def _export_prefix() -> list[str]:
+    """`opencode session export` (v2.0+) vs top-level `opencode export` (older).
+
+    Detect once; this is the touch point noted in README.md.
+    """
+    global _EXPORT_PREFIX
+    if _EXPORT_PREFIX is None:
+        probe = _opencode("session", "export", "--help")
+        _EXPORT_PREFIX = (
+            ["session", "export"] if (probe and probe.returncode == 0) else ["export"]
+        )
+    return _EXPORT_PREFIX
+
+
+def _import_argv(src: Path, directory: Path) -> list[str]:
+    """`opencode session import <file> --directory <dir>` (v2.0+) vs `opencode import <file>`."""
+    global _IMPORT_SESSION_SUB
+    if _IMPORT_SESSION_SUB is None:
+        probe = _opencode("session", "import", "--help")
+        _IMPORT_SESSION_SUB = bool(probe and probe.returncode == 0)
+    if _IMPORT_SESSION_SUB:
+        return ["session", "import", str(src), "--directory", str(directory)]
+    return ["import", str(src)]
 
 
 def _run_to_file(args: list[str], dest: Path) -> int | None:
@@ -182,7 +227,7 @@ def capture(stage: Path, log=print) -> dict:
     exported, failed = 0, []
     for sid in ids:
         dest = sdest / f"{sid}.json"
-        rc = _run_to_file(["export", sid], dest)
+        rc = _run_to_file([*_export_prefix(), sid], dest)
         if rc == 0 and dest.exists() and dest.stat().st_size > 0:
             exported += 1
         else:
@@ -191,12 +236,21 @@ def capture(stage: Path, log=print) -> dict:
     if ids and _opencode("--version") is None:
         manifest["notes"].append("opencode not on PATH: DB captured, session exports skipped")
 
-    # 4. Cheap side artifacts (contingency).
+    # 4. Side artifacts (contingency). opencode's workspace snapshot git dir can be
+    #    many GB; skip oversized side dirs rather than shipping the whole project.
     for sub in ("snapshot", "tool-output"):
         s = data_dir() / sub
-        if s.is_dir():
-            _copytree_fresh(s, stage / sub)
-            manifest["files"][f"{sub}/"] = "dir"
+        if not s.is_dir():
+            continue
+        size = _dir_size(s)
+        if size > SIDE_MAX_BYTES:
+            manifest["notes"].append(
+                f"skipped {sub}/ ({size} bytes > {SIDE_MAX_BYTES} limit; "
+                f"raise CONTINUITY_SIDE_MAX_MB to include)"
+            )
+            continue
+        _copytree_fresh(s, stage / sub)
+        manifest["files"][f"{sub}/"] = "dir"
 
     (stage / "CAPTURE.json").write_text(json.dumps(manifest, indent=2) + "\n")
     log(f"[opencode] captured {exported}/{len(ids)} sessions -> {stage}")
@@ -284,7 +338,7 @@ def _restore_export(stage: Path, mode_args: list[str]) -> int:
     files.sort(key=lambda f: 0 if not parent_of.get(f.stem) else 1)
 
     def _import(f: Path) -> bool:
-        res = _opencode("import", str(f))
+        res = _opencode(*_import_argv(f, directory))
         return bool(res and res.returncode == 0)
 
     imported, failed = 0, []

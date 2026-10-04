@@ -33,14 +33,27 @@ private repo the bootstrap needs a `GH_TOKEN`; a public repo clones non-interact
 Tested against OpenCode **1.18.x**. OpenCode's DB/CLI surface has shifted across
 versions; `tools/opencode.py` adapts to whichever it finds:
 
-| Area | Older OpenCode | 1.18.x |
-|---|---|---|
-| sessions table | `session_v2` | `session` — the tool detects either |
-| session export/import | `opencode session export/import` | `opencode export` / `opencode import` |
+| Area | Older | 1.18.x | 2.0.x |
+|---|---|---|---|
+| sessions table | `session_v2` | `session` | `session` — detected either way |
+| session export/import | `opencode session export/import` | `opencode export/import` | `opencode session export/import` |
 
 So a store captured on one version is still enumerable and restorable on another.
-If OpenCode changes again, the two touch points are `_session_table()` and the
-`export`/`import` calls in `tools/opencode.py`.
+The tool **probes the CLI once** and caches which spelling this OpenCode speaks
+(`_export_prefix()` / `_import_argv()` in `tools/opencode.py`); if OpenCode changes
+again, those two functions — plus `_session_table()` — are the touch points.
+
+> Captured on v2.0.22. Export is written to a file (never a pipe); a broken export
+> leaves a small help-text file, so `CAPTURE.json`'s `sessions.exported` is the
+> signal to check.
+
+### Side artifacts (`snapshot/`)
+
+opencode keeps a git snapshot of the workspace under `data_dir()/snapshot`; it is
+small on small projects but can be **several GB** on a large one. The tool skips
+side dirs larger than `CONTINUITY_SIDE_MAX_MB` (default **200 MB**) and records the
+skip in `CAPTURE.json` `notes`, so a session backup stays tens of MB instead of
+shipping the whole project. Raise the limit to include them.
 
 ## Use
 
